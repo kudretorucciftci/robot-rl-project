@@ -25,18 +25,18 @@ class RobotEnv(gym.Env):
         # Dünya köşegeninin uzunluğu, maksimum olası mesafe için
         self.max_world_diagonal = np.linalg.norm([self.world_size, self.world_size])
 
+        # --- Sensör Parametreleri (LIDAR) ---
+        self.num_lidar_rays = 8
+        self.lidar_range = 5.0  # Sensör menzili
+        
         # --- Gözlem ve Aksiyon Uzayları (Sürekli) ---
         # Gözlem: [robot_hizi_x, robot_hizi_y, robot_acisi, hedefe_goreli_x, hedefe_goreli_y,
-        #          en_yakin_engel_x_goreli, en_yakin_engel_y_goreli, en_yakin_engel_mesafesi]
+        #          ...8 adet LIDAR verisi...]
         # Hız limitleri
         obs_low = np.array([-self.max_speed, -self.max_speed, -np.pi,
-                            -self.world_size, -self.world_size, # Hedefe göreli konum
-                            -self.world_size, -self.world_size, # Engele göreli konum
-                            0.0]) # Engel mesafesi (0'dan başlar)
+                            -self.world_size, -self.world_size] + [0.0] * self.num_lidar_rays)
         obs_high = np.array([self.max_speed, self.max_speed, np.pi,
-                             self.world_size, self.world_size,  # Hedefe göreli konum
-                             self.world_size, self.world_size,  # Engele göreli konum
-                             self.max_world_diagonal]) # Maksimum engel mesafesi
+                             self.world_size, self.world_size] + [self.lidar_range] * self.num_lidar_rays)
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
         # Aksiyon: [ivmelenme, donus_hizi] - Her ikisi de -1 ve 1 arasında normalize
@@ -64,35 +64,55 @@ class RobotEnv(gym.Env):
                 print("Görselleştirme için basit bir daire kullanılacak.")
                 self.robot_img = None
 
+    def _get_lidar_readings(self):
+        lidar_data = []
+        angles = np.linspace(0, 2 * np.pi, self.num_lidar_rays, endpoint=False)
+        
+        for ray_angle in angles:
+            abs_angle = self.angle + ray_angle
+            ray_dir = np.array([np.cos(abs_angle), np.sin(abs_angle)])
+            
+            # Başlangıçta maksimum menzil
+            min_dist = self.lidar_range
+            
+            # Engellerle çarpışma kontrolü
+            for obs_pos in self._obstacle_locations:
+                # Robot pozisyonundan engele olan vektör
+                to_obs = obs_pos - self.position
+                # Işın (ray) üzerindeki izdüşüm
+                projection = np.dot(to_obs, ray_dir)
+                
+                if projection > 0:
+                    # Işından engele olan en yakın mesafe (dik mesafe)
+                    dist_to_ray = np.linalg.norm(to_obs - projection * ray_dir)
+                    if dist_to_ray < self.obstacle_radius:
+                        # Çember ve doğru kesişimi (basitleştirilmiş)
+                        intersect_dist = projection - np.sqrt(self.obstacle_radius**2 - dist_to_ray**2)
+                        if 0 < intersect_dist < min_dist:
+                            min_dist = intersect_dist
+            
+            # Duvarlarla çarpışma kontrolü
+            for i in range(2): # x ve y eksenleri
+                if ray_dir[i] != 0:
+                    dist_to_wall = (self.world_size if ray_dir[i] > 0 else 0) - self.position[i]
+                    wall_intersect = dist_to_wall / ray_dir[i]
+                    if 0 < wall_intersect < min_dist:
+                        min_dist = wall_intersect
+            
+            lidar_data.append(min_dist)
+            
+        return np.array(lidar_data, dtype=np.float32)
+
     def _get_obs(self):
         relative_target = self.target_position - self.position
+        lidar_readings = self._get_lidar_readings()
 
-        # En yakın engeli bul
-        closest_obstacle_relative_pos = np.array([0.0, 0.0], dtype=np.float32) # Varsayılan olarak sıfır
-        closest_obstacle_distance = self.max_world_diagonal # Varsayılan olarak maksimum mesafe
-
-        if self._obstacle_locations:
-            min_dist = float('inf')
-            temp_closest_obs_pos = None
-            for obs_pos in self._obstacle_locations:
-                dist = np.linalg.norm(self.position - obs_pos)
-                if dist < min_dist:
-                    min_dist = dist
-                    temp_closest_obs_pos = obs_pos
-            
-            if temp_closest_obs_pos is not None:
-                closest_obstacle_relative_pos = temp_closest_obs_pos - self.position
-                closest_obstacle_distance = min_dist
-
-        # Gözlem vektörünü oluştur
-        # [robot_hizi_x, robot_hizi_y, robot_acisi, hedefe_goreli_x, hedefe_goreli_y,
-        #  en_yakin_engel_x_goreli, en_yakin_engel_y_goreli, en_yakin_engel_mesafesi]
+        # [robot_hizi_x, robot_hizi_y, robot_acisi, hedefe_goreli_x, hedefe_goreli_y, LIDARx8]
         observation = np.concatenate([
-            self.velocity,                      # 2 elements (vx, vy)
-            [self.angle],                       # 1 element (robot_angle)
-            relative_target,                    # 2 elements (target_rx, target_ry)
-            closest_obstacle_relative_pos,      # 2 elements (obs_rx, obs_ry)
-            [closest_obstacle_distance]         # 1 element (obs_dist)
+            self.velocity,                      # 2 elements
+            [self.angle],                       # 1 element
+            relative_target,                    # 2 elements
+            lidar_readings                      # 8 elements
         ]).astype(np.float32)
 
         return observation
@@ -216,6 +236,15 @@ class RobotEnv(gym.Env):
             ax.add_patch(Circle(obs_pos, self.obstacle_radius, color='black', zorder=5))
             
         ax.add_patch(Circle(self.target_position, self.target_radius, color='green', zorder=5))
+
+        # --- LIDAR Render ---
+        lidar_readings = self._get_lidar_readings()
+        angles = np.linspace(0, 2 * np.pi, self.num_lidar_rays, endpoint=False)
+        for dist, ray_angle in zip(lidar_readings, angles):
+            abs_angle = self.angle + ray_angle
+            ray_end = self.position + np.array([np.cos(abs_angle), np.sin(abs_angle)]) * dist
+            ax.plot([self.position[0], ray_end[0]], [self.position[1], ray_end[1]], 
+                    color='red', linestyle=':', alpha=0.4, zorder=4)
 
         # --- Robot Çizimi ---
         if self.robot_img:
