@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+# agent/ klasörü sanal ortamınız olduğu için git'e eklenmemeli
+agent/ 
+
+# IDEs
+.idea/  # IntelliJ/PyCharm
+*.iml
+*.iws
+*.ipr
+.vscode/ # VS Code ayarları
+
+# Loglar ve Modeller
+logs/
+models/
+*.log
+*.log.*
+*.tfevents.*
+
+# İşletim sistemi tarafından oluşturulan dosyalar
+.DS_Store
+.DS_Store?
+*.orig
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Oluşturulan görseller/gifler
+# robot.png
+robot_evaluation.gif
+robot_evaluation_continuous.gif
