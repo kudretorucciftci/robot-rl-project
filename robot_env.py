@@ -12,7 +12,7 @@ class RobotEnv(gym.Env):
     def __init__(self, world_size=10.0, render_mode=None):
         super(RobotEnv, self).__init__()
 
-        # --- Fizik ve Dünya Parametreleri ---
+        # --- Physics and World Parameters ---
         self.world_size = world_size
         self.dt = 0.1
         self.max_speed = 10.0
@@ -22,27 +22,26 @@ class RobotEnv(gym.Env):
         self.robot_radius = 0.5
         self.target_radius = 0.4
         self.obstacle_radius = 0.5
-        # Dünya köşegeninin uzunluğu, maksimum olası mesafe için
+        # Length of the world diagonal, for maximum possible distance
         self.max_world_diagonal = np.linalg.norm([self.world_size, self.world_size])
 
-        # --- Sensör Parametreleri (LIDAR) ---
+        # --- Sensor Parameters (LIDAR) ---
         self.num_lidar_rays = 8
-        self.lidar_range = 5.0  # Sensör menzili
+        self.lidar_range = 5.0  # Sensor range
         
-        # --- Gözlem ve Aksiyon Uzayları (Sürekli) ---
-        # Gözlem: [robot_hizi_x, robot_hizi_y, robot_acisi, hedefe_goreli_x, hedefe_goreli_y,
-        #          ...8 adet LIDAR verisi...]
-        # Hız limitleri
+        # --- Observation and Action Spaces (Continuous) ---
+        # Observation: [robot_vel_x, robot_vel_y, robot_angle, rel_target_x, rel_target_y, ...8 LIDAR rays...]
+        # Speed limits
         obs_low = np.array([-self.max_speed, -self.max_speed, -np.pi,
                             -self.world_size, -self.world_size] + [0.0] * self.num_lidar_rays)
         obs_high = np.array([self.max_speed, self.max_speed, np.pi,
                              self.world_size, self.world_size] + [self.lidar_range] * self.num_lidar_rays)
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
-        # Aksiyon: [ivmelenme, donus_hizi] - Her ikisi de -1 ve 1 arasında normalize
+        # Action: [acceleration, angular_velocity] - Both normalized between -1 and 1
         self.action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
 
-        # --- Render ve Durum Değişkenleri ---
+        # --- Render and State Variables ---
         self.render_mode = render_mode
         self.position = None
         self.velocity = None
@@ -56,12 +55,12 @@ class RobotEnv(gym.Env):
         self.robot_img = None
         if self.render_mode:
             try:
-                # PIL kullanarak resmi yükle ve RGBA formatına çevir
+                # Load image using PIL and convert to RGBA
                 self.robot_img = Image.open("robot.png").convert("RGBA")
-                print("robot.png başarıyla yüklendi.")
+                print("robot.png loaded successfully.")
             except Exception as e:
-                print(f"UYARI: 'robot.png' yüklenemedi. Hata: {e}")
-                print("Görselleştirme için basit bir daire kullanılacak.")
+                print(f"WARNING: 'robot.png' could not be loaded. Error: {e}")
+                print("Using simple circle for visualization.")
                 self.robot_img = None
 
     def _get_lidar_readings(self):
@@ -69,30 +68,31 @@ class RobotEnv(gym.Env):
         angles = np.linspace(0, 2 * np.pi, self.num_lidar_rays, endpoint=False)
         
         for ray_angle in angles:
+            # Abs angle based on robot angle
             abs_angle = self.angle + ray_angle
             ray_dir = np.array([np.cos(abs_angle), np.sin(abs_angle)])
             
-            # Başlangıçta maksimum menzil
+            # Start with max range
             min_dist = self.lidar_range
             
-            # Engellerle çarpışma kontrolü
+            # Check collisions with obstacles
             for obs_pos in self._obstacle_locations:
-                # Robot pozisyonundan engele olan vektör
+                # Vector from robot to obstacle
                 to_obs = obs_pos - self.position
-                # Işın (ray) üzerindeki izdüşüm
+                # Projection onto ray
                 projection = np.dot(to_obs, ray_dir)
                 
                 if projection > 0:
-                    # Işından engele olan en yakın mesafe (dik mesafe)
+                    # Distance from ray to obstacle center
                     dist_to_ray = np.linalg.norm(to_obs - projection * ray_dir)
                     if dist_to_ray < self.obstacle_radius:
-                        # Çember ve doğru kesişimi (basitleştirilmiş)
+                        # Circle-line intersection (simplified)
                         intersect_dist = projection - np.sqrt(self.obstacle_radius**2 - dist_to_ray**2)
                         if 0 < intersect_dist < min_dist:
                             min_dist = intersect_dist
             
-            # Duvarlarla çarpışma kontrolü
-            for i in range(2): # x ve y eksenleri
+            # Check collisions with walls
+            for i in range(2): # x and y axes
                 if ray_dir[i] != 0:
                     dist_to_wall = (self.world_size if ray_dir[i] > 0 else 0) - self.position[i]
                     wall_intersect = dist_to_wall / ray_dir[i]
@@ -204,18 +204,18 @@ class RobotEnv(gym.Env):
             return self._render_frame()
 
     def _render_frame(self):
-        # rgb_array modu için her seferinde yeni bir figür oluştur (sağlamlık için)
+        # Create new figure for rgb_array mode (for robustness)
         if self.render_mode == "rgb_array":
             fig, ax = plt.subplots(figsize=(12, 12))
-        # human modu için mevcut figürü kullan (verimlilik için)
+        # Use existing figure for human mode (for efficiency)
         else:
             if self.fig is None:
                 plt.ion()
-                # Pencere boyutunu 12x12 yaparak büyütüyoruz
+                # Increase window size to 12x12
                 self.fig, self.ax = plt.subplots(figsize=(12, 12))
-                # Pencere başlığını ayarla
-                self.fig.canvas.manager.set_window_title('Robot RL Simülasyonu')
-                # Pencereyi öne getir (backend destekliyorsa)
+                # Set window title
+                self.fig.canvas.manager.set_window_title('Robot RL Simulation')
+                # Bring window to front
                 try:
                     mngr = plt.get_current_fig_manager()
                     mngr.window.attributes("-topmost", True)
@@ -229,7 +229,7 @@ class RobotEnv(gym.Env):
         ax.set_ylim(0, self.world_size)
         ax.set_aspect('equal')
         
-        # Izgara ekle (mesafe algısı için)
+        # Add grid for distance perception
         ax.grid(True, linestyle='--', alpha=0.6)
         
         for obs_pos in self._obstacle_locations:
@@ -246,19 +246,18 @@ class RobotEnv(gym.Env):
             ax.plot([self.position[0], ray_end[0]], [self.position[1], ray_end[1]], 
                     color='red', linestyle=':', alpha=0.4, zorder=4)
 
-        # --- Robot Çizimi ---
+        # --- Robot Drawing ---
         if self.robot_img:
             rotated_img = self.robot_img.rotate(-np.degrees(self.angle), resample=Image.BICUBIC)
-            # 32px olan robot görselini belirgin hale getirmek için zoom değerini 1.5 yapıyorum
-            # Bu yaklaşık 48 piksel boyutunda bir görüntü oluşturur
+            # Increase zoom to make the robot more visible
             zoom = 1.5
             oi = OffsetImage(rotated_img, zoom=zoom)
             ab = AnnotationBbox(oi, self.position, frameon=False, zorder=10)
             ax.add_artist(ab)
         else:
-            # Görsel yüklenemezse büyük bir mavi daire çiz
+            # Draw blue circle if image loading fails
             ax.add_patch(Circle(self.position, self.robot_radius, color='blue', zorder=10, alpha=0.8))
-            # Ön tarafı gösteren daha kalın bir çizgi
+            # Direction line
             forward_line = np.array([self.position, self.position + np.array([np.cos(self.angle), np.sin(self.angle)]) * (self.robot_radius + 0.5)])
             ax.plot(forward_line[:, 0], forward_line[:, 1], 'r-', linewidth=5, zorder=11)
 
@@ -271,7 +270,7 @@ class RobotEnv(gym.Env):
             img = np.frombuffer(buf, dtype=np.uint8)
             img = img.reshape(fig.canvas.get_width_height()[::-1] + (4,))
             img = np.roll(img, shift=-1, axis=2)
-            plt.close(fig) # Figürü kapat
+            plt.close(fig) # Close figure
             return img
 
     def close(self):
